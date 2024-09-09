@@ -1,4 +1,5 @@
 import autograd.numpy as np
+import autograd
 from autograd import grad
 from time import time
 
@@ -66,6 +67,7 @@ class VariationalInference(object):
         
     def compute_entropy(self, v=None):
         """ compute entropy term """
+        
         if v is None:
             v = np.exp(self.lam[self.num_params:2*self.num_params])
         return np.sum(0.5*np.log(2*np.pi*v) + 0.5)
@@ -113,7 +115,10 @@ class VariationalInference(object):
             self.lam_history.append(self.lam)
 
             # compute gradient of ELBO wrt. variational parameters
+            
+            
             g = self.compute_ELBO_gradient(self.lam)
+            
 
             # take gradient step
             self.lam = self.optimizer.step(g)
@@ -137,7 +142,7 @@ class VariationalInference(object):
         return self
     
 class BlackBoxVariationalInference(VariationalInference):
-    def __init__(self, theta_map, P, log_prior, log_lik, num_params, step_size=1e-2, max_itt=2000, num_samples=20, batch_size=None, seed=0, verbose=False):
+    def __init__(self, theta_map, P, log_prior, log_lik, num_params, step_size=1e-2, max_itt=2000, num_samples=20, batch_size=None, seed=0, verbose=False, T = 1):
     
         # arguments specific to BBVI
         self.log_prior = log_prior          # function for evaluating the log prior
@@ -147,6 +152,7 @@ class BlackBoxVariationalInference(VariationalInference):
         self.seed = seed                    # seed
         self.P = P                          # random projection matrix
         self.theta_map = theta_map          # MAP estimate
+        self.T = T                          # temperature
         
         # pass remaining argument to VI class
         super(BlackBoxVariationalInference, self).__init__(name="Black-box VI", num_params=num_params, step_size=step_size, max_itt=max_itt, verbose=verbose)
@@ -173,28 +179,27 @@ class BlackBoxVariationalInference(VariationalInference):
         epsilon = np.random.normal(0, 1, size=(self.num_samples, self.num_params))
         
         z_samples = m + np.sqrt(v)*epsilon  # shape: num_samples x K
-
-        print('shapes:', z_samples.shape, self.P.T.shape, self.theta_map.shape)
+        
         w_samples = z_samples @ self.P.T + self.theta_map  # shape: num_samples x D
-
+                    
         # prior term (scalar )
-        expected_log_prior_term = np.mean(self.log_prior(z_samples, m, v))  # shape: scalar
-    
+        expected_log_prior_term = np.mean(self.log_prior(z_samples, 0, 1))  # shape: scalar 
         # batch mode or minibatching?
         if self.batch_size:
             # Use mini-batching
             
             batch_idx = np.random.choice(range(self.N), size=self.batch_size, replace=False)
             X_batch, y_batch = self.X[batch_idx, :], self.y[batch_idx]
+                        
             
             expected_log_lik_term = self.N/self.batch_size*self.log_lik(X_batch, y_batch, w_samples)  # shape: scalar
         else:
             # No mini-batching
             expected_log_lik_term = self.log_lik(self.X, self.y, w_samples)   # shape: scalar
-        
+              
         # compute ELBO
-        ELBO = expected_log_lik_term + expected_log_prior_term + self.compute_entropy(v)
-        
+        # including the temperature scaling of the likelihood as proposed in "Subspace Inference for Bayesian Deep Learning"
+        ELBO = expected_log_lik_term/self.T + expected_log_prior_term + self.compute_entropy(v)
         return ELBO
     
 
