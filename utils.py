@@ -175,7 +175,6 @@ class BlackBoxVariationalInference(VariationalInference):
         m, v  = self.unpack(lam)
         
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
-        
         epsilon = np.random.normal(0, 1, size=(self.num_samples, self.num_params))
         
         z_samples = m + np.sqrt(v)*epsilon  # shape: num_samples x K
@@ -183,7 +182,7 @@ class BlackBoxVariationalInference(VariationalInference):
         w_samples = z_samples @ self.P.T + self.theta_map  # shape: num_samples x D
                     
         # prior term (scalar )
-        expected_log_prior_term = np.mean(self.log_prior(z_samples, m, v))  # shape: scalar 
+        expected_log_prior_term = np.mean(self.log_prior(z_samples))  # shape: scalar 
         # batch mode or minibatching?
         if self.batch_size:
             # Use mini-batching
