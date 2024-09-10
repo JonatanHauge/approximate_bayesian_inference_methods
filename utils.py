@@ -183,7 +183,7 @@ class BlackBoxVariationalInference(VariationalInference):
         w_samples = z_samples @ self.P.T + self.theta_map  # shape: num_samples x D
                     
         # prior term (scalar )
-        expected_log_prior_term = np.mean(self.log_prior(z_samples, 0, 1))  # shape: scalar 
+        expected_log_prior_term = np.mean(self.log_prior(z_samples, m, v))  # shape: scalar 
         # batch mode or minibatching?
         if self.batch_size:
             # Use mini-batching
