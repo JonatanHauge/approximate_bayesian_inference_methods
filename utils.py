@@ -28,13 +28,6 @@ class VariationalInference(object):
         entropy = 0.5 * torch.log(2 * torch.pi * v) + 0.5
         return entropy.sum()  
 
-    def generate_posterior_samples(self, num_samples=1000):
-        mean = self.m
-        var = self.v
-        std = torch.sqrt(var)
-        samples = torch.normal(mean=mean.unsqueeze(0), std=std.unsqueeze(0).expand(num_samples, -1))
-        return samples
-
     def fit(self, X, y, seed=0):
         """ fits the variational approximation q given data (X,y) by maximizing the ELBO using gradient-based methods """ 
         torch.manual_seed(seed)
@@ -134,6 +127,29 @@ class BlackBoxVariationalInference(VariationalInference):
         ELBO = 1/self.T * expected_log_lik_term + expected_log_prior_term + self.compute_entropy(torch.exp(self.v))
         
         return -ELBO, [1/self.T * expected_log_lik_term, expected_log_prior_term, self.compute_entropy(torch.exp(self.v))]
+    
+    def generate_posterior_sample(self):
+        epsilon = torch.randn(self.num_params)
+        z_sample = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
+        w_sample = z_sample @ self.P.T + self.theta_map
+        return w_sample
+    
+    def predict(self, Xtest, num_samples=100):
+        self.model.eval()
+        y_preds = torch.zeros(len(Xtest), 10)
+        for i in range(num_samples):
+            w_sample = self.generate_posterior_sample()
+            set_weights(self.params, w_sample)
+            y_preds += self.model(Xtest)
+        y_preds /= num_samples
+        return y_preds
+    
+    def compute_accuracy(self, Xtest, ytest, num_samples=100):
+        y_preds = torch.argmax(self.predict(Xtest, num_samples), dim = 1)
+        acc = torch.sum(y_preds == ytest).float()/len(ytest)
+        
+        return acc.detach().numpy()
+
 
 
 
