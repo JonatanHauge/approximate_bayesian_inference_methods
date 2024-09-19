@@ -20,18 +20,16 @@ theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the wei
 # settings
 seed = 4242
 torch.manual_seed(seed)
-max_itt = 2000
+max_itt = 4000
 step_size = 0.01
 batch_size = 100
 T = 5000
-K = 5
-random = False
+K = 100
+random = True
 if random:
     theta_map = torch.randn_like(theta_map)
 verbose = True
 save_fig = True
-
-
 
 
 num_params = sum(p.numel() for p in net.parameters())
@@ -69,8 +67,8 @@ for i in range(6):
 
 if save_fig:
     if random:
-        plt.savefig(f'plots/Random_theta_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={np.round(acc, 3)}.png')
+        plt.savefig(f'plots/Random_theta_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={acc:.3}.png')
     else:
-        plt.savefig(f'plots/Theta_MAP_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={np.round(acc, 3)}.png')
+        plt.savefig(f'plots/Theta_MAP_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={acc:.3}.png')
 
 plt.show()
