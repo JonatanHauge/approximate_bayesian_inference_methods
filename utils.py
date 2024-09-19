@@ -129,19 +129,21 @@ class BlackBoxVariationalInference(VariationalInference):
         return -ELBO, [1/self.T * expected_log_lik_term, expected_log_prior_term, self.compute_entropy(torch.exp(self.v))]
     
     def generate_posterior_sample(self):
-        epsilon = torch.randn(self.num_params)
-        z_sample = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
-        w_sample = z_sample @ self.P.T + self.theta_map
+        with torch.no_grad():
+            epsilon = torch.randn(self.num_params)
+            z_sample = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
+            w_sample = z_sample @ self.P.T + self.theta_map
         return w_sample
     
     def predict(self, Xtest, num_samples=100):
         self.model.eval()
         y_preds = torch.zeros(len(Xtest), 10)
-        for i in range(num_samples):
-            w_sample = self.generate_posterior_sample()
-            set_weights(self.params, w_sample)
-            y_preds += self.model(Xtest)
-        y_preds /= num_samples
+        with torch.no_grad():
+            for i in range(num_samples):
+                w_sample = self.generate_posterior_sample()
+                set_weights(self.params, w_sample)
+                y_preds += self.model(Xtest)
+            y_preds /= num_samples
         return y_preds
     
     def compute_accuracy(self, Xtest, ytest, num_samples=100):
@@ -149,8 +151,6 @@ class BlackBoxVariationalInference(VariationalInference):
         acc = torch.sum(y_preds == ytest).float()/len(ytest)
         
         return acc.detach().numpy()
-
-
 
 
 def log_like_NN_classification(model, params, X, y, theta):
@@ -172,7 +172,7 @@ def log_like_NN_classification(model, params, X, y, theta):
     
     return -nll
 
-def log_prior_pdf(z, prior_mean=torch.tensor(0), prior_var=torch.tensor(1)):
+def log_prior_pdf(z, prior_mean=torch.tensor(0), prior_var=torch.tensor(0.1)):
     """ Log prior for the weights (assuming Gaussian prior)"""
     log_prior = torch.sum(log_npdf(z, prior_mean, prior_var))
     return log_prior

@@ -18,40 +18,41 @@ theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the wei
 
 
 # settings
-seed = 1
+seed = 4242
 torch.manual_seed(seed)
-num_params = sum(p.numel() for p in net.parameters())
-print([p.numel() for p in net.parameters()])
-print('Number of parameters:', num_params)
-K = 5
-P = torch.randn(num_params, K)
-P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
-max_itt = 200
+max_itt = 2000
 step_size = 0.01
 batch_size = 100
 T = 5000
+K = 5
 random = False
 if random:
     theta_map = torch.randn_like(theta_map)
 verbose = True
-save_fig = False
+save_fig = True
 
+
+
+
+num_params = sum(p.numel() for p in net.parameters())
+P = torch.randn(num_params, K)
+P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
 bbvi = BlackBoxVariationalInference(net, theta_map, P, log_prior_pdf, log_like_NN_classification, 
                                     K, step_size, max_itt, batch_size, seed, verbose, T)
 
 bbvi.fit(xtrain, ytrain)
 
 #calculate accuracy
-acc = bbvi.compute_accuracy(xtest, ytest, num_samples=10)
+acc = bbvi.compute_accuracy(xtest, ytest, num_samples=50)
 print('Accuracy:', np.round(acc, 3))
 
 import matplotlib.pyplot as plt
 fig, axes = plt.subplots(3, 2, figsize=(10, 6))
 
 if random:
-    fig.suptitle(f'Random theta with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {np.round(acc, 3)}')
+    fig.suptitle(f'Random theta with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}')
 else:
-    fig.suptitle(f'Theta_MAP with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {np.round(acc, 3)}')
+    fig.suptitle(f'Theta_MAP with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}')
 
 axes[0,0].plot(bbvi.log_like_history, label=f'log-likelihood/{T}')
 axes[1,0].plot(bbvi.log_prior_history, label='log-prior')
