@@ -84,7 +84,7 @@ def log_like_NN_classification(X, y, theta):
 
     log_likelihood = torch.tensor(0.0, device=theta.device)  # Initialize as a tensor on the same device as theta_s
 
-    new_weights_in_NN(net, theta)# Set the weights for the model
+    set_weights(net, theta)# Set the weights for the model
     outputs = softmax(net(X)) # Forward pass
     log_probs = torch.log(outputs + 1e-6)  # Adding epsilon to avoid log(0)
     log_likelihood += torch.sum(log_probs[range(len(y)), y])
@@ -95,32 +95,33 @@ def log_like_NN_classification(X, y, theta):
 net = LeNet()
 #load weights
 weights = torch.load('checkpoints\LeNet5_acc_95.12%.pth')
+#net.load_state_dict(weights)
 theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the weights
- # set requires_grad to False??
-theta_map = theta_map.detach().requires_grad_(True)
 
 #theta_map = torch.zeros_like(theta_map)
 
 # settings
 num_params = sum(p.numel() for p in net.parameters())
+print([p.numel() for p in net.parameters()])
 print('Number of parameters:', num_params)
 K = 5
 P = torch.randn(num_params, K)
 P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
-max_itt = 2000
-step_size = 0.1
+max_itt = 1000
+step_size = 0.001
 batch_size = 100
-T = 1
+T = 1000
 seed = 1
 verbose = True
 
 bbvi = BlackBoxVariationalInference(theta_map, P, log_prior_pdf, log_like_NN_classification, 
                                     K, step_size, max_itt, batch_size, seed, verbose, T)
+
 bbvi.fit(xtrain, ytrain)
 
 
 import matplotlib.pyplot as plt
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+fig, axes = plt.subplots(1, 3, figsize=(10, 6))
 axes[0].plot(bbvi.ELBO_history, label='BBVI')
 axes[0].set(title='Evidence lower bound', xlabel='Iterations')
 axes[0].legend()

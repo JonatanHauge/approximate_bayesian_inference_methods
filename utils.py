@@ -110,8 +110,8 @@ class VariationalInference(object):
             # verbose?
             if self.verbose:
                 if (itt+1) % 250 == 0:
-                    print(self.m.grad)
-                    print(self.v.grad)
+                    print('m gradient: ', self.m.grad)
+                    print('v gradient: ', self.v.grad)
                     print('\tItt: %5d, ELBO = %3.2f' % (itt, np.mean(self.ELBO_history[-250:])))
         
         t1 = time()
@@ -189,7 +189,8 @@ class BlackBoxVariationalInference(VariationalInference):
             expected_log_lik_term = self.log_lik(self.X, self.y, w_samples)   # shape: scalar
         
         # compute ELBO
-        ELBO = 1/self.T * expected_log_lik_term + expected_log_prior_term + self.compute_entropy(self.v)
+        #ELBO = 1/self.T * expected_log_lik_term + expected_log_prior_term + self.compute_entropy(self.v)
+        ELBO = 1/self.T * expected_log_lik_term
         
         return -ELBO # return negative ELBO since we want to maximize and the optimizer minimizes
     
