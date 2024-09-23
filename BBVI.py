@@ -1,133 +1,99 @@
-from utils import BlackBoxVariationalInference
+from utils import BlackBoxVariationalInference, log_like_NN_classification
 import numpy as np
 import torch 
-from torchvision.datasets import MNIST
 from models.LeNet5 import LeNet
 
-# load the MNIST dataset
-mnist_train = MNIST('./datasets', train=True, download=False)
-mnist_test = MNIST('./datasets', train=False, download=False)
-
-# load the data
-xtrain = mnist_train.train_data
-ytrain = mnist_train.train_labels
-xtest = mnist_test.test_data
-ytest = mnist_test.test_labels
-
-# normalize the data
-xtrain = xtrain.float()/255
-xtest = xtest.float()/255
-
-#insert a channel dimension
-xtrain = xtrain.unsqueeze(1)
-xtest = xtest.unsqueeze(1)
-
-log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.pi * v)
-log_mvnpdf = lambda x, m, v: -0.5 * torch.sum((x - m) ** 2 / v + torch.log(2 * torch.pi * v), dim=1)
-#softmax = lambda x: np.exp(x) / np.sum(np.exp(x), axis=1)[:, None]
-softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True)
 
 
-def extract_parameters(model):
-    params = []	
-    for module in model.modules():	
-        for name in list(module._parameters.keys()):	
-            if module._parameters[name] is None:	
-                continue	
-            param = module._parameters[name]	
-            params.append((module, name, param.size()))	
-            module._parameters.pop(name)	
-    return params
+# Check if CUDA is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+# Load data
+xtrain, ytrain = torch.load('./datasets/mnist_train.pt')
+xtest, ytest = torch.load('./datasets/mnist_test.pt')
+
+xtrain = xtrain.to(device=device)
+ytrain = ytrain.to(device=device)
+xtest = xtest.to(device=device) 
+ytest = ytest.to(device=device)
 
 
-
-def set_weights(params, w):	
-    offset = 0
-    for module, name, shape in params:
-        size = np.prod(shape)	       
-        value = w[offset:offset + size]
-        setattr(module, name, value.view(shape))	
-        offset += size
-
-def log_prior_pdf(z, prior_mean=torch.tensor(0), prior_var=torch.tensor(1)):
-    """ Evaluates the log prior Gaussian for each sample of z. 
-        D denote the dimensionality of the model and S denotes the number of MC samples.
-
-        Inputs:
-            z             -- np.array of shape (S, 2*K)
-            prior_mean    -- np.array of shape (S, K)
-            prior_var     -- np.array of shape (S, K)
-
-        Returns:
-            log_prior     -- np.array of shape (1,)???
-       """
-    log_prior = torch.sum(log_npdf(z, prior_mean, prior_var))
-    return log_prior
-
-def log_like_NN_classification(X, y, theta):
-    """
-    Implements the log likelihood function for the classification NN with categorical likelihood.
-    S is number of MC samples, N is number of datapoints in likelihood and D is the dimensionality of the model (number of weights).
-
-    Inputs:
-    X              -- Data (np.array of size N x D)
-    y              -- vector of target (np.array of size N)
-    theta_s        -- vector of weights (np.array of size (S, D))
-
-    outputs: 
-    log_likelihood -- Array of log likelihood for each sample in z (np.array of size S)
-     """
-
-    log_likelihood = torch.tensor(0.0, device=theta.device)  # Initialize as a tensor on the same device as theta_s
-    params = extract_parameters(net)   
-    set_weights(params, theta)
-    outputs = softmax(net(X)) # Forward pass
-    log_probs = torch.log(outputs + 1e-6)  # Adding epsilon to avoid log(0)
-    log_likelihood += torch.sum(log_probs[range(len(y)), y])
-    
-    return log_likelihood
-
-
-net = LeNet()
-#load weights
-weights = torch.load('checkpoints\LeNet5_acc_95.12%.pth')
+net = LeNet().to(device=device) 
+weights = torch.load('./checkpoints/LeNet5_acc_95.12%.pth') # load the weights
 theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the weights
- # set requires_grad to False??
-theta_map = theta_map.detach().requires_grad_(True)
 
-#theta_map = torch.zeros_like(theta_map)
 
 # settings
-num_params = sum(p.numel() for p in net.parameters())
-print('Number of parameters:', num_params)
-K = 5
-P = torch.randn(num_params, K)
-P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
-max_itt = 2000
-step_size = 0.1
-batch_size = 100
-T = 1
-seed = 1
-verbose = True
+seed = 4242
+torch.manual_seed(seed)
+max_itt = 30000
+start_plot = 15000 # when to start plotting (discarding initial iterations for visualization)
+step_size = 0.0005
+batch_size = 2000
+T = 5000
+K = 50
+prior_sigma = 0.1
+random = False
+if random:
+    theta_map = torch.randn_like(theta_map)
 
-bbvi = BlackBoxVariationalInference(theta_map, P, log_prior_pdf, log_like_NN_classification, 
-                                    K, step_size, max_itt, batch_size, seed, verbose, T)
+theta_map = theta_map.to(device=device)
+verbose = True
+save_fig = True
+
+
+num_params = sum(p.numel() for p in net.parameters())
+P = torch.randn(num_params, K, device=device)
+P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
+
+bbvi = BlackBoxVariationalInference(net, theta_map, P, log_like_NN_classification, 
+                                    K, step_size, max_itt, batch_size, seed, verbose, 
+                                    T, prior_sigma, device)
+
 bbvi.fit(xtrain, ytrain)
+
+#calculate accuracy
+acc = bbvi.compute_accuracy(xtest, ytest, num_samples=50)
+print('Accuracy:', np.round(acc, 3))
+
+entropy = bbvi.compute_entropy_posterior_predictive(xtest)
+print('Entropy:', np.round(entropy, 3))
+
+lpd = bbvi.compute_LPD(xtest, ytest)
+print('LPD:', np.round(lpd, 3))
+
+ece = bbvi.compute_ECE(xtest, ytest)
+print('ECE:', np.round(ece, 3))
+
+
 
 
 import matplotlib.pyplot as plt
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-axes[0].plot(bbvi.ELBO_history, label='BBVI')
-axes[0].set(title='Evidence lower bound', xlabel='Iterations')
-axes[0].legend()
+fig, axes = plt.subplots(3, 1, figsize=(10, 6))
 
-for i in range(5):
-    axes[1].plot(range(max_itt), bbvi.m_history[:, i], '-', linewidth=0.5)
-    axes[2].plot(range(max_itt), bbvi.v_history[:, i], '-', linewidth=0.5)
+if random:
+    fig.suptitle(f'Random theta with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}, Entropy: {entropy:.3f}, ECE: {ece:.3f}, LPD: {lpd:.3f}')
+else:
+    fig.suptitle(f'Theta_MAP with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}, Entropy: {entropy:.3f}, ECE: {ece:.3f}, LPD: {lpd:.3f}')
 
-axes[2].set(xlabel='Posterior variance $v_1$', ylabel='Posterior variance $v_2$', title='Optimization trajectory for variances')
+
+axes[0].plot(range(start_plot, max_itt),bbvi.ELBO_history[start_plot:], label='ELBO')
+axes[1].plot(range(start_plot, max_itt),bbvi.m_history[start_plot:, 0], '-', linewidth=0.5, label = "m")
+axes[2].plot(range(start_plot, max_itt),bbvi.v_history[start_plot:, 0], '-', linewidth=0.5, label = "v")
+
+number_of_param_to_plot = min(K,8)
+
+for i in range(2,number_of_param_to_plot):
+    axes[1].plot(range(start_plot, max_itt),bbvi.m_history[start_plot:, i], '-', linewidth=0.5)
+    axes[2].plot(range(start_plot, max_itt),bbvi.v_history[start_plot:, i], '-', linewidth=0.5)
 
 for i in range(3):
-    axes.flat[i].legend()
+    axes.flat[i].legend(loc = 'lower right')
+
+if save_fig:
+    if random:
+        plt.savefig(f'plots/Random_theta_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={acc:.3}_Entropy={entropy:.3f}_ECE={ece:.3f}=LPD: {lpd:.3f}.png')
+    else:
+        plt.savefig(f'plots/Theta_MAP_K={K}_T={T}_batch_size={batch_size}_step_size={step_size}_acc={acc:.3}_Entropy={entropy:.3f}_ECE={ece:.3f}=LPD: {lpd:.3f}.png')
 
 plt.show()
