@@ -36,9 +36,9 @@ class BlackBoxVariationalInference(object):
          
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
         epsilon = torch.randn(self.num_params, device = self.device)
-        z_samples = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
+        z_samples = self.m  + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
         w_samples = z_samples @ self.P.T + self.theta_map   # shape: (, D)
-        expected_log_prior_term = torch.mean(self.log_prior(z_samples))  # shape: scalar
+        expected_log_prior_term = torch.sum(self.log_prior(z_samples))  # shape: scalar
     
         # batch mode or minibatching?
         if self.batch_size:
@@ -152,9 +152,9 @@ class BlackBoxVariationalInference(object):
             self.ELBO_history.append(-ELBO.clone().detach())
             self.m_history.append(self.m.clone().detach())
             self.v_history.append(torch.exp(self.v.clone().detach()))
-            #self.log_like_history.append(log_like.cpu().clone().detach().numpy())
-            #self.log_prior_history.append(prior.cpu().clone().detach().numpy())
-            #self.entropy_history.append(entropy.cpu().clone().detach().numpy())
+            self.log_like_history.append(log_like.clone().detach())
+            self.log_prior_history.append(prior.clone().detach())
+            self.entropy_history.append(entropy.clone().detach())
 
             self.optimizer.zero_grad()
             ELBO.backward()
@@ -172,9 +172,9 @@ class BlackBoxVariationalInference(object):
         self.ELBO_history = np.array([elbo.cpu().numpy() for elbo in self.ELBO_history]) #since we optimze the negative ELBO
         self.m_history = np.array([m.cpu().numpy() for m in self.m_history])
         self.v_history = np.array([v.cpu().numpy() for v in self.v_history])
-        #self.log_like_history = np.array(self.log_like_history)
-        #self.log_prior_history = np.array(self.log_prior_history)
-        #self.entropy_history = np.array(self.entropy_history)
+        self.log_like_history = np.array([log_like.cpu().numpy() for log_like in self.log_like_history])
+        self.log_prior_history = np.array([log_prior.cpu().numpy() for log_prior in self.log_prior_history])
+        self.entropy_history = np.array([ent.cpu().numpy() for ent in self.entropy_history])
             
         return self
     
