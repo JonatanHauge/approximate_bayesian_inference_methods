@@ -2,6 +2,7 @@ from utils import BlackBoxVariationalInference, log_like_NN_classification
 import numpy as np
 import torch 
 from models.LeNet5 import LeNet
+import pandas as pd
 
 
 
@@ -27,15 +28,15 @@ theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the wei
 seed = 4242
 torch.manual_seed(seed)
 max_itt = 30000
-start_plot = 15000 # when to start plotting (discarding initial iterations for visualization)
+start_plot = 0
 step_size = 0.0005
-batch_size = 2000
-T = 5000
-K = 50
-prior_sigma = 0.1
+batch_size = 500
+T = 1# 5000
+K = 5
+prior_sigma = 0.5
 random = False
 if random:
-    theta_map = torch.randn_like(theta_map)
+    theta_map = torch.zeros_like(theta_map)
 
 theta_map = theta_map.to(device=device)
 verbose = True
@@ -69,7 +70,7 @@ print('ECE:', np.round(ece, 3))
 
 
 import matplotlib.pyplot as plt
-fig, axes = plt.subplots(3, 1, figsize=(10, 6))
+fig, axes = plt.subplots(3, 2, figsize=(10, 6))
 
 if random:
     fig.suptitle(f'Random theta with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}, Entropy: {entropy:.3f}, ECE: {ece:.3f}, LPD: {lpd:.3f}')
@@ -77,17 +78,33 @@ else:
     fig.suptitle(f'Theta_MAP with K={K}, T={T}, batch_size={batch_size}, step_size={step_size}\nAccuracy: {acc:.3f}, Entropy: {entropy:.3f}, ECE: {ece:.3f}, LPD: {lpd:.3f}')
 
 
-axes[0].plot(range(start_plot, max_itt),bbvi.ELBO_history[start_plot:], label='ELBO')
-axes[1].plot(range(start_plot, max_itt),bbvi.m_history[start_plot:, 0], '-', linewidth=0.5, label = "m")
-axes[2].plot(range(start_plot, max_itt),bbvi.v_history[start_plot:, 0], '-', linewidth=0.5, label = "v")
 
-number_of_param_to_plot = min(K,8)
+log_like_series = pd.Series(bbvi.log_like_history)
+running_mean_log_like = log_like_series.rolling(window=500).mean().dropna()
+
+ELBO_series = pd.Series(bbvi.ELBO_history)
+running_mean_ELBO = ELBO_series.rolling(window=500).mean().dropna()
+
+log_prior_series = pd.Series(bbvi.log_prior_history)
+running_mean_log_prior = log_prior_series.rolling(window=500).mean().dropna()
+
+
+axes[0,0].plot(running_mean_log_like, label=f'log-likelihood/{T}')
+axes[1,0].plot(running_mean_log_prior, label='log-prior')
+axes[2,0].plot(range(start_plot, max_itt), bbvi.entropy_history[start_plot:], label='entropy')
+
+axes[0,1].plot(running_mean_ELBO, label='ELBO')
+axes[1,1].plot(range(start_plot, max_itt), bbvi.m_history[start_plot:, 0], '-', linewidth=0.5, label = "m")
+axes[2,1].plot(range(start_plot, max_itt), bbvi.v_history[start_plot:, 0], '-', linewidth=0.5, label = "v")
+axes[2,1].axhline(y = prior_sigma, xmin = start_plot, xmax = max_itt)
+
+number_of_param_to_plot = min(K,50)
 
 for i in range(2,number_of_param_to_plot):
-    axes[1].plot(range(start_plot, max_itt),bbvi.m_history[start_plot:, i], '-', linewidth=0.5)
-    axes[2].plot(range(start_plot, max_itt),bbvi.v_history[start_plot:, i], '-', linewidth=0.5)
+    axes[1,1].plot(range(start_plot, max_itt),bbvi.m_history[start_plot:, i], '-', linewidth=0.5)
+    axes[2,1].plot(range(start_plot, max_itt),bbvi.v_history[start_plot:, i], '-', linewidth=0.5)
 
-for i in range(3):
+for i in range(6):
     axes.flat[i].legend(loc = 'lower right')
 
 if save_fig:
