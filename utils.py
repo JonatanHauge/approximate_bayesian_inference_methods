@@ -2,11 +2,10 @@ import torch
 import torch.optim as optim
 from time import time
 import numpy as np
+from torchmetrics.classification import MulticlassCalibrationError
 
 log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.pi * v)
 softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True)
- 
-    
     
 class BlackBoxVariationalInference(object):
     def __init__(self, model, theta_map, P, log_lik, num_params, step_size=1e-2, max_itt=2000, batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, device = None):
@@ -86,8 +85,19 @@ class BlackBoxVariationalInference(object):
         entropy = -torch.sum(predictive_probs * torch.log(predictive_probs+1e-6), dim=1).mean().cpu().item()
         return entropy
     
-    
     def compute_ECE(self, Xtest, ytest, num_bins = 10):
+        preds = self.predict(Xtest)
+        metric = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='l1')
+        ece = metric(preds, ytest)
+        return ece.cpu().item()
+    
+    def compute_MCE(self, Xtest, ytest, num_bins = 10):
+        preds = self.predict(Xtest)
+        metric = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='max')
+        ece = metric(preds, ytest)
+        return ece.cpu().item()
+    
+    def compute_ECE_old(self, Xtest, ytest, num_bins = 10):
         # inspiration from Bayesian Machine Learning course week 7
         preds = self.predict(Xtest)
         # create bins
