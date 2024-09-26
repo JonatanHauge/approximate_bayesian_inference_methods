@@ -110,7 +110,7 @@ test_acc = 100 * (ytest==y.max(1)[1]).float().mean()
 print(f'Test accuracy: {test_acc:.2f}%')
 
 # Save the model
-torch.save(net.state_dict(), f'LeNet5_Mnist_acc_{test_acc:.2f}%.pth')
+#torch.save(net.state_dict(), f'LeNet5_Mnist_acc_{test_acc:.2f}%.pth')
 
 #visualize 10 predictions in 2x5 grid with corresponding true labels
 fig, axs = plt.subplots(2, 5, figsize=(10, 5))
