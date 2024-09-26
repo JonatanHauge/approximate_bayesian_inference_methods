@@ -1,4 +1,4 @@
-from torchvision.datasets import MNIST
+from torchvision.datasets import MNIST, FashionMNIST
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -39,7 +39,7 @@ class LeNet(nn.Module):
         size = x.size()[1:]
         return np.prod(size)
 
-def backprop_deep(xtrain, ltrain, net, epochs, B=100, gamma=.001, rho=.9):
+def backprop_deep(xtrain, ltrain, net, epochs, B=100, lr=.001, weight_decay=0):
     '''
     Backprop.
     
@@ -54,8 +54,9 @@ def backprop_deep(xtrain, ltrain, net, epochs, B=100, gamma=.001, rho=.9):
     '''
     N = xtrain.size()[0]     # Training set size
     NB = N//B                # Number of minibatches
+    print(f'Number of minibatches: {NB}. Number of data points: {N}.')
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(net.parameters(), lr=gamma, momentum=rho)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
     
     for epoch in range(epochs):
         running_loss = 0.0
@@ -90,32 +91,16 @@ def backprop_deep(xtrain, ltrain, net, epochs, B=100, gamma=.001, rho=.9):
                       (epoch + 1, k + 1, running_loss / 100))
                 running_loss = 0.0
 
-# load the MNIST dataset
-mnist_train = MNIST('./datasets', train=True, download=True)
-mnist_test = MNIST('./datasets', train=False, download=True)
 
 # load the data
-xtrain = mnist_train.train_data
-ytrain = mnist_train.train_labels
-xtest = mnist_test.test_data
-ytest = mnist_test.test_labels
-
-# normalize the data
-xtrain = xtrain.float()/255
-xtest = xtest.float()/255
-
-#insert a channel dimension
-xtrain = xtrain.unsqueeze(1)
-xtest = xtest.unsqueeze(1)
-print(f'shape of xtrain after unsqueeze is {xtrain.shape}.')
-print(f'shape of xtest after unsqueeze is {xtest.shape}.')
-
+xtrain, ytrain = torch.load('./datasets/fashion_mnist_train.pt')
+xtest, ytest = torch.load('./datasets/fashion_mnist_test.pt')
 
 net = LeNet()
 print('LeNet model architechture: ', net)
 
 start = time.time()
-backprop_deep(xtrain, ytrain, net, epochs=5)
+backprop_deep(xtrain, ytrain, net, epochs=50, B = 200, lr = 0.001, weight_decay = 0.0005)
 end = time.time()
 print(f'It takes {end-start:.6f} seconds.')
 
@@ -125,7 +110,7 @@ test_acc = 100 * (ytest==y.max(1)[1]).float().mean()
 print(f'Test accuracy: {test_acc:.2f}%')
 
 # Save the model
-#torch.save(net.state_dict(), f'LeNet5_acc_{test_acc:.2f}%.pth')
+torch.save(net.state_dict(), f'LeNet5_Mnist_acc_{test_acc:.2f}%.pth')
 
 #visualize 10 predictions in 2x5 grid with corresponding true labels
 fig, axs = plt.subplots(2, 5, figsize=(10, 5))

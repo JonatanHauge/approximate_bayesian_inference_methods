@@ -35,7 +35,8 @@ class VariationalInference(object):
         self.ELBO_history, self.m_history, self.v_history = [], [], []
         self.log_like_history, self.log_prior_history, self.entropy_history = [], [], []
         
-        print('Fitting approximation using %s' % self.name)        
+        print('Fitting approximation using %s' % self.name)       
+        print('N is %d' % self.N)
         t0 = time()
         for itt in range(self.max_itt):
             
@@ -106,9 +107,10 @@ class BlackBoxVariationalInference(VariationalInference):
         
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
         epsilon = torch.randn(self.num_params)
+        
         z_samples = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
         w_samples = z_samples @ self.P.T + self.theta_map   # shape: (, D)
-        expected_log_prior_term = torch.mean(self.log_prior(z_samples))  # shape: scalar
+        expected_log_prior_term = torch.sum(self.log_prior(z_samples))  # shape: scalar
     
         # batch mode or minibatching?
         if self.batch_size:
@@ -117,6 +119,7 @@ class BlackBoxVariationalInference(VariationalInference):
             # Use the indices to create batches
             X_batch = self.X[batch_idx]
             y_batch = self.y[batch_idx]
+            
               
             expected_log_lik_term = self.N/self.batch_size*self.log_lik(self.model, self.params, X_batch, y_batch, w_samples)  # shape: scalar
         else:

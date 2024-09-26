@@ -21,13 +21,13 @@ theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the wei
 seed = 4242
 torch.manual_seed(seed)
 max_itt = 4000
-step_size = 0.01
+step_size = 0.05
 batch_size = 100
-T = 5000
+T = 1
 K = 100
 random = True
 if random:
-    theta_map = torch.randn_like(theta_map)
+    theta_map = torch.zeros_like(theta_map)
 verbose = True
 save_fig = True
 
