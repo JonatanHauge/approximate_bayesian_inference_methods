@@ -3,9 +3,10 @@ import torch.optim as optim
 from time import time
 import numpy as np
 from torchmetrics.classification import MulticlassCalibrationError
+from tqdm import tqdm
 
 log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.pi * v)
-softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True)
+softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True) 
     
 class BlackBoxVariationalInference(object):
     def __init__(self, model, theta_map, P, log_lik, num_params, step_size=1e-2, max_itt=2000, batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, device = None):
@@ -28,30 +29,20 @@ class BlackBoxVariationalInference(object):
         
         # set   parameters and optimizer
         self.m = torch.zeros(num_params, requires_grad=True, device = self.device) 
-        self.v = torch.zeros(num_params, requires_grad = True, device = self.device) #initialize v in log domain 
+        self.v = torch.tensor([-1. for _ in range(num_params)], requires_grad = True, device = self.device) #initialize v in log domain 
         self.optimizer = optim.Adam(params=[self.m, self.v], lr=step_size)
         
-    def compute_ELBO(self):
+    def compute_ELBO(self, X, y):
          
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
+        X, y = X.to(self.device), y.to(self.device)
+        batch_size = len(X)
         epsilon = torch.randn(self.num_params, device = self.device)
         z_samples = self.m  + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
         w_samples = z_samples @ self.P.T + self.theta_map   # shape: (, D)
         expected_log_prior_term = torch.sum(self.log_prior(z_samples))  # shape: scalar
-    
-        # batch mode or minibatching?
-        if self.batch_size:
-            # Use mini-batching
-            batch_idx = torch.randperm(self.N, device=self.device)[:self.batch_size]
-            # Use the indices to create batches
-            X_batch = self.X[batch_idx]
-            y_batch = self.y[batch_idx]
               
-            expected_log_lik_term = self.N/self.batch_size*self.log_lik(self.model, self.params, X_batch, y_batch, w_samples)  # shape: scalar
-        else:
-            # No mini-batching
-            expected_log_lik_term = self.log_lik(self.X, self.y, w_samples)   # shape: scalar
-        
+        expected_log_lik_term = self.N/batch_size*self.log_lik(self.model, self.params, X, y, w_samples)  # shape: scalar
         # compute ELBO
         ELBO = 1/self.T * expected_log_lik_term + expected_log_prior_term + self.compute_entropy(torch.exp(self.v))
         
@@ -64,127 +55,122 @@ class BlackBoxVariationalInference(object):
             w_sample = z_sample @ self.P.T + self.theta_map
         return w_sample
     
-    def predict(self, Xtest, num_samples=100):
+    def predict(self, test_loader, num_samples=100):
         self.model.eval()
-        y_preds = torch.zeros(len(Xtest), 10, device=self.device)
+        N = len(test_loader.dataset)
+        y_preds = torch.zeros(N, 100, device=self.device) #hardcoded number of labels (100)
         with torch.no_grad():
-            for i in range(num_samples):
+            for _ in range(num_samples):
                 w_sample = self.generate_posterior_sample()
                 set_weights(self.params, w_sample)
-                y_preds += softmax(self.model(Xtest))
+                idx = 0
+                for Xtest, _ in test_loader:
+                    Xtest = Xtest.to(self.device)
+                    batch_size = len(Xtest)
+                    y_preds[idx:idx+batch_size, :] += softmax(self.model(Xtest))
+                    idx += batch_size
             y_preds /= num_samples
         return y_preds
     
-    def compute_accuracy(self, Xtest, ytest, num_samples=100):
-        y_preds = torch.argmax(self.predict(Xtest, num_samples), dim = 1)
-        acc = torch.sum(y_preds == ytest).float()/len(ytest)
-        return acc.cpu().detach().numpy()
+    def compute_accuracy(self, test_loader, num_samples=100):
+        """ Compute accuracy """
+        y_preds = torch.argmax(self.predict(test_loader, num_samples), dim = 1)
+        ytest = torch.cat([y for _, y in test_loader], dim=0)
+        ytest = ytest.to(self.device)
+        acc = torch.sum(y_preds == ytest).float().mean().cpu().item() / len(ytest)
+        return acc
     
-    def compute_entropy_posterior_predictive(self, Xtest, num_samples=100):
-        predictive_probs = self.predict(Xtest, num_samples)
+    def compute_entropy_posterior_predictive(self, test_loader, num_samples=100):
+        """ Compute entropy of the posterior predictive distribution """
+        predictive_probs = self.predict(test_loader, num_samples)
         entropy = -torch.sum(predictive_probs * torch.log(predictive_probs+1e-6), dim=1).mean().cpu().item()
         return entropy
     
-    def compute_ECE(self, Xtest, ytest, num_bins = 10):
-        preds = self.predict(Xtest)
-        metric = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='l1')
-        ece = metric(preds, ytest)
-        return ece.cpu().item()
+    def compute_ECE(self, test_loader, num_bins = 10):
+        """ Compute expected calibration error """
+        preds = self.predict(test_loader)
+        metric = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='l1')
+        ytest = torch.cat([y for _, y in test_loader], dim=0)
+        ytest = ytest.to(self.device)
+        ece = metric(preds, ytest).cpu().item()
+        return ece
     
-    def compute_MCE(self, Xtest, ytest, num_bins = 10):
-        preds = self.predict(Xtest)
-        metric = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='max')
-        ece = metric(preds, ytest)
-        return ece.cpu().item()
+    def compute_MCE(self, test_loader, num_bins = 10):
+        """ Compute maximum calibration error """
+        preds = self.predict(test_loader)
+        metric = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='max')
+        ytest = torch.cat([y for _, y in test_loader], dim=0)
+        ytest = ytest.to(self.device)
+        ece = metric(preds, ytest).cpu().item()
+        return ece
     
-    def compute_ECE_old(self, Xtest, ytest, num_bins = 10):
-        # inspiration from Bayesian Machine Learning course week 7
-        preds = self.predict(Xtest)
-        # create bins
-        bins = np.linspace(0, 1, num_bins+1)
-        
-        conf_all, yhat = torch.max(preds, dim=1)
-        correct_all = 1.0*(ytest == yhat)
-        
-        # preallocate lists
-        acc_bin, conf_bin, point_in_bins = [], [], []
-        
-        # loop through each bin
-        for i in range(num_bins):
-            bin_start, bin_end = bins[i], bins[i+1]        
-            bin_idx = torch.logical_and(bin_start <= conf_all, conf_all < bin_end)
-            num_points_in_bin = torch.sum(bin_idx)
-
-            # don't want to bother with empty bins
-            if num_points_in_bin == 0:
-                continue
-            
-            # store results
-            conf_bin.append(torch.mean(conf_all[bin_idx]).cpu())
-            acc = torch.mean(correct_all[bin_idx])
-            acc_bin.append(acc.cpu())
-            point_in_bins.append(num_points_in_bin.cpu())
-
-        acc_bin = np.array(acc_bin)
-        conf_bin = np.array(conf_bin)
-        point_in_bins = np.array(point_in_bins)
-
-        # compute ECE
-        ECE = np.sum(point_in_bins*np.abs(acc_bin-conf_bin))/len(ytest)
-        
-        return ECE
-    
-    def compute_LPD(self, Xtest, ytest):
-        preds = self.predict(Xtest)[torch.arange(len(ytest)), ytest]
+    def compute_LPD(self, test_loader):
+        """ Compute log predictive density """
+        ytest = torch.cat([y for _, y in test_loader], dim=0)
+        ytest = ytest.to(self.device)
+        preds = self.predict(test_loader)[torch.arange(len(ytest)), ytest]
         lpd = torch.log(preds + 1e-6).mean().cpu().item()
         return lpd
+    
+    def compute_all_metrics(self, test_loader, num_samples=100, num_bins=10):
+        """ Compute all metrics """
+        logits = self.predict(test_loader, num_samples=num_samples)
+        ytest = torch.cat([y for _, y in test_loader], dim=0)
+        ytest = ytest.to(self.device)
+        acc = torch.sum(torch.argmax(logits, dim=1) == ytest).float().mean().cpu().item() / len(ytest)
+        entropy = -torch.sum(logits * torch.log(logits+1e-6), dim=1).mean().cpu().item()
+        lpd = torch.log(logits[torch.arange(len(ytest)), ytest] + 1e-6).mean().cpu().item()
+        ece = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='l1')(logits, ytest).cpu().item()
+        mce = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='max')(logits, ytest).cpu().item()
+        return acc, entropy, lpd, ece, mce
     
     def compute_entropy(self, v=None):
         """ Compute entropy term """
         entropy = 0.5 * torch.log(2 * torch.pi * v) + 0.5
         return entropy.sum()  
 
-    def fit(self, X, y, seed=0):
+    def fit(self, train_loader, seed=0):
         """ fits the variational approximation q given data (X,y) by maximizing the ELBO using gradient-based methods """ 
         torch.manual_seed(seed)
-        self.X, self.y, self.N = X, y, len(X)
+        self.N = len(train_loader.dataset)
         self.ELBO_history, self.m_history, self.v_history = [], [], []
         self.log_like_history, self.log_prior_history, self.entropy_history = [], [], []
         
         print('Fitting approximation using BBVI')        
         t0 = time()
-        for itt in range(self.max_itt):
+        for itt in tqdm(range(self.max_itt), desc='Training Progress', leave=True):
+            X, y = next(iter(train_loader))
+            X, y = X.to(self.device), y.to(self.device)
             
-            # evaluate ELBO
-            ELBO, [log_like, prior, entropy] = self.compute_ELBO()
+            ELBO, [log_like, prior, entropy] = self.compute_ELBO(X, y) # evaluate ELBO
             
             # store current values for plotting purposes
-            self.ELBO_history.append(-ELBO.clone().detach())
-            self.m_history.append(self.m.clone().detach())
-            self.v_history.append(torch.exp(self.v.clone().detach()))
-            self.log_like_history.append(log_like.clone().detach())
-            self.log_prior_history.append(prior.clone().detach())
-            self.entropy_history.append(entropy.clone().detach())
+            self.ELBO_history.append(-ELBO.clone().detach().cpu().numpy())
+            self.m_history.append(self.m.clone().detach().cpu().numpy())
+            self.v_history.append(torch.exp(self.v.clone().detach()).cpu().numpy())
+            self.log_like_history.append(log_like.clone().detach().cpu().numpy())
+            self.log_prior_history.append(prior.clone().detach().cpu().numpy())
+            self.entropy_history.append(entropy.clone().detach().cpu().numpy())
 
             self.optimizer.zero_grad()
             ELBO.backward()
             self.optimizer.step() #SHould update self.lam
             
             # verbose?
-            if self.verbose:
-                if (itt+1) % 1000 == 0:
-                    print('\tItt: %5d'% (itt)) 
+            if self.verbose and (itt + 1) % 100 == 0:  # Update every 100 iterations
+                tqdm.write(f'\tIteration: {itt + 1}, ELBO: {np.mean(self.ELBO_history[itt-100:itt]):.2f}, Log Likelihood: {np.mean(self.log_like_history[itt-100:itt]):.2f}, '
+                       f'Prior: {np.mean(self.log_prior_history[itt-100:itt]):.2f}, Entropy: {np.mean(self.entropy_history[itt-100:itt]):.2f}')
         
         t1 = time()
         print('\tOptimization done in %3.2fs\n' % (t1-t0))
         
         # track quantities through iterations for visualization purposes
-        self.ELBO_history = np.array([elbo.cpu().numpy() for elbo in self.ELBO_history]) #since we optimze the negative ELBO
-        self.m_history = np.array([m.cpu().numpy() for m in self.m_history])
-        self.v_history = np.array([v.cpu().numpy() for v in self.v_history])
-        self.log_like_history = np.array([log_like.cpu().numpy() for log_like in self.log_like_history])
-        self.log_prior_history = np.array([log_prior.cpu().numpy() for log_prior in self.log_prior_history])
-        self.entropy_history = np.array([ent.cpu().numpy() for ent in self.entropy_history])
+        self.ELBO_history = np.array(self.ELBO_history) #since we optimze the negative ELBO
+        self.m_history = np.array(self.m_history)
+        self.v_history = np.array(self.v_history)
+        self.log_like_history = np.array(self.log_like_history)
+        self.log_prior_history = np.array(self.log_prior_history)
+        self.entropy_history = np.array(self.entropy_history)
             
         return self
     
@@ -199,8 +185,6 @@ def log_like_NN_classification(model, params, X, y, theta):
     nll = torch.nn.CrossEntropyLoss(reduction='sum')(model(X), y)
 
     return -nll
-
-
 
 def extract_parameters(model):
     params = []	
