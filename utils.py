@@ -9,7 +9,8 @@ log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.p
 softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True) 
     
 class BlackBoxVariationalInference(object):
-    def __init__(self, model, theta_map, P, log_lik, num_params, step_size=1e-2, max_itt=2000, batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, device = None):
+    def __init__(self, model, theta_map, P, log_lik, K, step_size=1e-2, max_itt=2000, 
+                 batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, SWA = True, device = None):
         
         self.model = model                      # model
         self.params = extract_parameters(model) # extract parameters
@@ -19,17 +20,17 @@ class BlackBoxVariationalInference(object):
         self.P = P                          # random projection matrix
         self.theta_map = theta_map          # MAP estimate
         self.T = T                          # Temperature parameter
-        self.num_params = num_params        # number of parameters
+        self.K = K        # number of parameters
         self.verbose = verbose        
         self.X, self.y, self.ELBO = None, None, None
-        self.num_params, self.step_size, self.max_itt = num_params, step_size, max_itt
-        self.num_var_params = 2*self.num_params  
+        self.K, self.step_size, self.max_itt = K, step_size, max_itt
         self.prior_sigma = torch.tensor(prior_sigma)
         self.device = device 
+        self.SWA = SWA
         
         # set   parameters and optimizer
-        self.m = torch.zeros(num_params, requires_grad=True, device = self.device) 
-        self.v = torch.tensor([-1. for _ in range(num_params)], requires_grad = True, device = self.device) #initialize v in log domain 
+        self.m = torch.zeros(K, requires_grad=True, device = self.device) 
+        self.v = torch.tensor([-1. for _ in range(K)], requires_grad = True, device = self.device) #initialize v in log domain 
         self.optimizer = optim.Adam(params=[self.m, self.v], lr=step_size)
         
     def compute_ELBO(self, X, y):
@@ -37,7 +38,7 @@ class BlackBoxVariationalInference(object):
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
         X, y = X.to(self.device), y.to(self.device)
         batch_size = len(X)
-        epsilon = torch.randn(self.num_params, device = self.device)
+        epsilon = torch.randn(self.K, device = self.device)
         z_samples = self.m  + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
         w_samples = z_samples @ self.P.T + self.theta_map   # shape: (, D)
         expected_log_prior_term = torch.sum(self.log_prior(z_samples))  # shape: scalar
@@ -50,7 +51,7 @@ class BlackBoxVariationalInference(object):
     
     def generate_posterior_sample(self):
         with torch.no_grad():
-            epsilon = torch.randn(self.num_params, device = self.device)
+            epsilon = torch.randn(self.K, device = self.device)
             z_sample = self.m + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
             w_sample = z_sample @ self.P.T + self.theta_map
         return w_sample
@@ -72,46 +73,6 @@ class BlackBoxVariationalInference(object):
             y_preds /= num_samples
         return y_preds
     
-    def compute_accuracy(self, test_loader, num_samples=100):
-        """ Compute accuracy """
-        y_preds = torch.argmax(self.predict(test_loader, num_samples), dim = 1)
-        ytest = torch.cat([y for _, y in test_loader], dim=0)
-        ytest = ytest.to(self.device)
-        acc = torch.sum(y_preds == ytest).float().mean().cpu().item() / len(ytest)
-        return acc
-    
-    def compute_entropy_posterior_predictive(self, test_loader, num_samples=100):
-        """ Compute entropy of the posterior predictive distribution """
-        predictive_probs = self.predict(test_loader, num_samples)
-        entropy = -torch.sum(predictive_probs * torch.log(predictive_probs+1e-6), dim=1).mean().cpu().item()
-        return entropy
-    
-    def compute_ECE(self, test_loader, num_bins = 10):
-        """ Compute expected calibration error """
-        preds = self.predict(test_loader)
-        metric = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='l1')
-        ytest = torch.cat([y for _, y in test_loader], dim=0)
-        ytest = ytest.to(self.device)
-        ece = metric(preds, ytest).cpu().item()
-        return ece
-    
-    def compute_MCE(self, test_loader, num_bins = 10):
-        """ Compute maximum calibration error """
-        preds = self.predict(test_loader)
-        metric = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='max')
-        ytest = torch.cat([y for _, y in test_loader], dim=0)
-        ytest = ytest.to(self.device)
-        ece = metric(preds, ytest).cpu().item()
-        return ece
-    
-    def compute_LPD(self, test_loader):
-        """ Compute log predictive density """
-        ytest = torch.cat([y for _, y in test_loader], dim=0)
-        ytest = ytest.to(self.device)
-        preds = self.predict(test_loader)[torch.arange(len(ytest)), ytest]
-        lpd = torch.log(preds + 1e-6).mean().cpu().item()
-        return lpd
-    
     def compute_all_metrics(self, test_loader, num_samples=100, num_bins=10):
         """ Compute all metrics """
         logits = self.predict(test_loader, num_samples=num_samples)
@@ -131,10 +92,12 @@ class BlackBoxVariationalInference(object):
 
     def fit(self, train_loader, seed=0):
         """ fits the variational approximation q given data (X,y) by maximizing the ELBO using gradient-based methods """ 
+        
         torch.manual_seed(seed)
         self.N = len(train_loader.dataset)
         self.ELBO_history, self.m_history, self.v_history = [], [], []
         self.log_like_history, self.log_prior_history, self.entropy_history = [], [], []
+        self.SWA_list = torch.zeros(100, 2*self.K, device=self.device)
         
         print('Fitting approximation using BBVI')        
         t0 = time()
@@ -155,6 +118,11 @@ class BlackBoxVariationalInference(object):
             self.optimizer.zero_grad()
             ELBO.backward()
             self.optimizer.step() #SHould update self.lam
+
+            # SWA
+            if self.SWA:
+                if itt >= self.max_itt - 100:
+                    self.SWA_list[itt - self.max_itt + 100] = torch.cat([self.m, self.v])
             
             # verbose?
             if self.verbose and (itt + 1) % 100 == 0:  # Update every 100 iterations
@@ -163,6 +131,12 @@ class BlackBoxVariationalInference(object):
         
         t1 = time()
         print('\tOptimization done in %3.2fs\n' % (t1-t0))
+
+        if self.SWA:
+            self.m = self.SWA_list.mean(dim=0)[:self.K]
+            self.v = self.SWA_list.mean(dim=0)[self.K:]
+
+
         
         # track quantities through iterations for visualization purposes
         self.ELBO_history = np.array(self.ELBO_history) #since we optimze the negative ELBO
