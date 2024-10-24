@@ -7,9 +7,10 @@ from tqdm import tqdm
 
 log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.pi * v)
 softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True) 
-    
+
+
 class BlackBoxVariationalInference(object):
-    def __init__(self, model, theta_map, P, log_lik, K, step_size=1e-2, max_itt=2000, 
+    def __init__(self, model, theta_map, P, log_lik, K, rank = 1, step_size=1e-2, max_itt=2000, 
                  batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, SWA = True, device = None):
         
         self.model = model                      # model
@@ -23,7 +24,7 @@ class BlackBoxVariationalInference(object):
         self.K = K        # number of parameters
         self.verbose = verbose        
         self.X, self.y, self.ELBO = None, None, None
-        self.K, self.step_size, self.max_itt = K, step_size, max_itt
+        self.K, self.rank, self.step_size, self.max_itt = K, rank, step_size, max_itt
         self.prior_sigma = torch.tensor(prior_sigma)
         self.device = device 
         self.SWA = SWA
@@ -31,15 +32,19 @@ class BlackBoxVariationalInference(object):
         # set   parameters and optimizer
         self.m = torch.zeros(K, requires_grad=True, device = self.device) 
         self.v = torch.tensor([-1. for _ in range(K)], requires_grad = True, device = self.device) #initialize v in log domain 
-        self.optimizer = optim.Adam(params=[self.m, self.v], lr=step_size)
+        self.L = torch.tensor([[0.1 for _ in range(rank)] for _ in range(K)], requires_grad=True, device = self.device)
+        self.optimizer = optim.Adam(params=[self.m, self.v, self.L], lr=step_size)
         
     def compute_ELBO(self, X, y):
          
         # generate samples from epsilon ~ N(0, 1) and use re-parametrization trick
         X, y = X.to(self.device), y.to(self.device)
         batch_size = len(X)
-        epsilon = torch.randn(self.K, device = self.device)
-        z_samples = self.m  + torch.sqrt(torch.exp(self.v)) * epsilon  # shape:  (,K)
+
+        epsilon_1 = torch.randn(self.K, device = self.device)
+        epsilon_2 = torch.randn(self.rank, device = self.device)
+        z_samples = self.m  + torch.sqrt(torch.exp(self.v)) * epsilon_1 + self.L @ epsilon_2  # shape:  (,K)
+
         w_samples = z_samples @ self.P.T + self.theta_map   # shape: (, D)
         expected_log_prior_term = torch.sum(self.log_prior(z_samples))  # shape: scalar
               
@@ -94,15 +99,16 @@ class BlackBoxVariationalInference(object):
     
     def compute_entropy(self, v=None):
         """ Compute entropy term """
-        entropy = 0.5 * torch.log(2 * torch.pi * v) + 0.5
-        return entropy.sum()  
+        Sigma = torch.diag(v) + self.L @ self.L.T
+        entropy = self.K * 0.5 * (1 + torch.log(torch.tensor(2 * torch.pi)))  + 1/2 * torch.logdet(Sigma)
+        return entropy 
 
     def fit(self, train_loader, seed=0):
         """ fits the variational approximation q given data (X,y) by maximizing the ELBO using gradient-based methods """ 
         
         torch.manual_seed(seed)
         self.N = len(train_loader.dataset)
-        self.ELBO_history, self.m_history, self.v_history = [], [], []
+        self.ELBO_history, self.m_history, self.v_history, self.L_history = [], [], [], []
         self.log_like_history, self.log_prior_history, self.entropy_history = [], [], []
         self.SWA_list = torch.zeros(100, 2*self.K, device=self.device)
         
@@ -118,6 +124,7 @@ class BlackBoxVariationalInference(object):
             self.ELBO_history.append(-ELBO.clone().detach().cpu().numpy())
             self.m_history.append(self.m.clone().detach().cpu().numpy())
             self.v_history.append(torch.exp(self.v.clone().detach()).cpu().numpy())
+            self.L_history.append(self.L.clone().detach().cpu().numpy().flatten())
             self.log_like_history.append(log_like.clone().detach().cpu().numpy())
             self.log_prior_history.append(prior.clone().detach().cpu().numpy())
             self.entropy_history.append(entropy.clone().detach().cpu().numpy())
@@ -149,6 +156,7 @@ class BlackBoxVariationalInference(object):
         self.ELBO_history = np.array(self.ELBO_history) #since we optimze the negative ELBO
         self.m_history = np.array(self.m_history)
         self.v_history = np.array(self.v_history)
+        self.L_history = np.array(self.L_history)
         self.log_like_history = np.array(self.log_like_history)
         self.log_prior_history = np.array(self.log_prior_history)
         self.entropy_history = np.array(self.entropy_history)

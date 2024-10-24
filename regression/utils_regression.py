@@ -2,13 +2,12 @@ import torch
 import torch.optim as optim
 from time import time
 import numpy as np
-from torchmetrics.classification import MulticlassCalibrationError
 from tqdm import tqdm
 
 log_npdf = lambda x, m, v: -(x - m) ** 2 / (2 * v) - 0.5 * torch.log(2 * torch.pi * v)
 softmax = lambda x: torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]) / torch.sum(torch.exp(x - torch.max(x, dim=1, keepdim=True)[0]), dim=1, keepdim=True) 
     
-class BlackBoxVariationalInference(object):
+class BBVI_Regression(object):
     def __init__(self, model, theta_map, P, log_lik, K, step_size=1e-2, max_itt=2000, 
                  batch_size=None, seed=0, verbose=False, T = 1000, prior_sigma = 1, SWA = True, device = None):
         
@@ -66,7 +65,7 @@ class BlackBoxVariationalInference(object):
     def predict(self, test_loader, num_samples=100):
         self.model.eval()
         N = len(test_loader.dataset)
-        y_preds = torch.zeros(N, 10, device=self.device) #hardcoded number of labels (100)
+        y_preds = torch.zeros(N, 1, device=self.device) #hardcoded number of labels (100)
         with torch.no_grad():
             for _ in range(num_samples):
                 w_sample = self.generate_posterior_sample()
@@ -75,22 +74,20 @@ class BlackBoxVariationalInference(object):
                 for Xtest, _ in test_loader:
                     Xtest = Xtest.to(self.device)
                     batch_size = len(Xtest)
-                    y_preds[idx:idx+batch_size, :] += softmax(self.model(Xtest))
+                    y_preds[idx:idx+batch_size, :] += self.model(Xtest)
                     idx += batch_size
             y_preds /= num_samples
         return y_preds
     
-    def compute_all_metrics(self, test_loader, num_samples=100, num_bins=10):
+    def compute_all_metrics(self, test_loader, num_samples=100):
         """ Compute all metrics """
-        logits = self.predict(test_loader, num_samples=num_samples)
+        preds = self.predict(test_loader, num_samples=num_samples)
         ytest = torch.cat([y for _, y in test_loader], dim=0)
         ytest = ytest.to(self.device)
-        acc = torch.sum(torch.argmax(logits, dim=1) == ytest).float().mean().cpu().item() / len(ytest)
-        entropy = -torch.sum(logits * torch.log(logits+1e-6), dim=1).mean().cpu().item()
-        lpd = torch.log(logits[torch.arange(len(ytest)), ytest] + 1e-6).mean().cpu().item()
-        ece = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='l1')(logits, ytest).cpu().item()
-        mce = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='max')(logits, ytest).cpu().item()
-        return acc, entropy, lpd, ece, mce
+        mse = torch.mean((preds - ytest)**2).cpu().item()
+        #entropy = -torch.sum(logits * torch.log(logits+1e-6), dim=1).mean().cpu().item()
+        #lpd = torch.log(logits[torch.arange(len(ytest)), ytest] + 1e-6).mean().cpu().item()
+        return mse
     
     def compute_entropy(self, v=None):
         """ Compute entropy term """
@@ -160,12 +157,11 @@ class BlackBoxVariationalInference(object):
         return log_prior
 
 
-def log_like_NN_classification(model, params, X, y, theta):
+def log_like_NN_regression(model, params, X, y, theta):
 
     set_weights(params, theta)# Set the weights for the model
-    nll = torch.nn.CrossEntropyLoss(reduction='sum')(model(X), y)
-
-    return -nll
+    sse = torch.nn.MSELoss(reduction='sum')(model(X), y)
+    return -sse
 
 def extract_parameters(model):
     params = []	

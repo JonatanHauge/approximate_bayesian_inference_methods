@@ -66,7 +66,7 @@ class BlackBoxVariationalInference(object):
     def predict(self, test_loader, num_samples=100):
         self.model.eval()
         N = len(test_loader.dataset)
-        y_preds = torch.zeros(N, 10, device=self.device) #hardcoded number of labels (100)
+        y_preds = torch.zeros(N, 100, device=self.device) #hardcoded number of labels (100)
         with torch.no_grad():
             for _ in range(num_samples):
                 w_sample = self.generate_posterior_sample()
@@ -88,8 +88,8 @@ class BlackBoxVariationalInference(object):
         acc = torch.sum(torch.argmax(logits, dim=1) == ytest).float().mean().cpu().item() / len(ytest)
         entropy = -torch.sum(logits * torch.log(logits+1e-6), dim=1).mean().cpu().item()
         lpd = torch.log(logits[torch.arange(len(ytest)), ytest] + 1e-6).mean().cpu().item()
-        ece = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='l1')(logits, ytest).cpu().item()
-        mce = MulticlassCalibrationError(num_classes=10, n_bins=num_bins, norm='max')(logits, ytest).cpu().item()
+        ece = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='l1')(logits, ytest).cpu().item()
+        mce = MulticlassCalibrationError(num_classes=100, n_bins=num_bins, norm='max')(logits, ytest).cpu().item()
         return acc, entropy, lpd, ece, mce
     
     def compute_entropy(self, v=None):

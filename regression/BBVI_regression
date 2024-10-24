@@ -1,0 +1,58 @@
+import torch
+import numpy as np
+import pandas as pd
+from torch.utils.data import DataLoader, TensorDataset
+from utils_regression import BBVI_Regression, log_like_NN_regression
+from models.SimpleNet import SimpleNet
+
+
+dataset = "toydata"
+seed = 4242
+torch.manual_seed(seed)
+max_itt = 10000
+start_plots = [0]
+step_size = 0.0005
+batch_size = 10
+prior_sigma = 0.01
+SWA = True
+verbose = True
+save_fig = True
+K = 10
+T = 1
+
+fashion_MLE_log_like = -7202.52
+mnist_MLE_log_like = -534.40
+
+# Check if CUDA is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+# Load data
+if dataset == 'toydata':
+    x_train = torch.tensor(pd.read_csv('regression/data/toy_data_train.csv')['x'].values).float().view(-1, 1)
+    y_train = torch.tensor(pd.read_csv('regression/data/toy_data_train.csv')['y'].values).float().view(-1, 1)
+    x_test = torch.tensor(pd.read_csv('regression/data/toy_data_test.csv')['x'].values).float().view(-1, 1)
+    y_test = torch.tensor(pd.read_csv('regression/data/toy_data_test.csv')['y'].values).float().view(-1, 1)
+    weights = torch.load('regression/checkpoints/SimpleNet.pth', map_location=device)
+
+train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
+
+
+net = SimpleNet().to(device=device) 
+theta_map = torch.cat([w.flatten() for w in weights.values()]) # flatten the weights
+theta_map = theta_map.to(device=device)
+
+num_params = sum(p.numel() for p in net.parameters())
+P = torch.randn(num_params, K, device=device)
+P /= torch.norm(P, dim=0)  # Normalize columns to norm 1
+
+bbvi = BBVI_Regression(net, theta_map, P, log_like_NN_regression, 
+                                            K, step_size, max_itt, batch_size, seed, verbose, 
+                                            T, prior_sigma, SWA, device)
+
+bbvi.fit(train_loader)
+
+mse = bbvi.compute_all_metrics(test_loader, num_samples=100)
+
+#OOD erro
+print('MSE:', mse)
