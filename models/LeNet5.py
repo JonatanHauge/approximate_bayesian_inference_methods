@@ -35,3 +35,18 @@ class LeNet(nn.Module):
         '''
         size = x.size()[1:]
         return np.prod(size)
+    
+    def first_layers(self, x):
+        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
+        x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
+        x = x.view(-1, self.num_flat_features(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+
+        return x
+    
+    def last_layer(self, z, last_params):
+        W = last_params[:840].reshape(10, 84)
+        b = last_params[840:]
+        logits = F.linear(z, W, b)
+        return logits

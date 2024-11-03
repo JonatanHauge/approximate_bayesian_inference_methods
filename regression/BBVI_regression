@@ -4,35 +4,33 @@ import pandas as pd
 from torch.utils.data import DataLoader, TensorDataset
 from utils_regression import BBVI_Regression, log_like_NN_regression
 from models.SimpleNet import SimpleNet
+import matplotlib.pyplot as plt
 
 
-dataset = "toydata"
+dataset = "toy_data2"
 seed = 4242
 torch.manual_seed(seed)
 max_itt = 10000
 start_plots = [0]
 step_size = 0.0005
 batch_size = 10
-prior_sigma = 0.01
+prior_sigma = 0.1
 SWA = True
 verbose = True
 save_fig = True
 K = 10
 T = 1
 
-fashion_MLE_log_like = -7202.52
-mnist_MLE_log_like = -534.40
-
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 # Load data
-if dataset == 'toydata':
-    x_train = torch.tensor(pd.read_csv('regression/data/toy_data_train.csv')['x'].values).float().view(-1, 1)
-    y_train = torch.tensor(pd.read_csv('regression/data/toy_data_train.csv')['y'].values).float().view(-1, 1)
-    x_test = torch.tensor(pd.read_csv('regression/data/toy_data_test.csv')['x'].values).float().view(-1, 1)
-    y_test = torch.tensor(pd.read_csv('regression/data/toy_data_test.csv')['y'].values).float().view(-1, 1)
-    weights = torch.load('regression/checkpoints/SimpleNet.pth', map_location=device)
+
+x_train = torch.tensor(pd.read_csv(f'regression/data/{dataset}_train.csv')['x'].values).float().view(-1, 1)
+y_train = torch.tensor(pd.read_csv(f'regression/data/{dataset}_train.csv')['y'].values).float().view(-1, 1)
+x_test = torch.tensor(pd.read_csv(f'regression/data/{dataset}_test.csv')['x'].values).float().view(-1, 1)
+y_test = torch.tensor(pd.read_csv(f'regression/data/{dataset}_test.csv')['y'].values).float().view(-1, 1)
+weights = torch.load(f'regression/checkpoints/SimpleNet_{dataset}.pth', map_location=device)
 
 train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
@@ -54,5 +52,18 @@ bbvi.fit(train_loader)
 
 mse = bbvi.compute_all_metrics(test_loader, num_samples=100)
 
-#OOD erro
+pred_range = torch.linspace(-7, 7, 500).view(-1, 1).to(device)
+pred_range_loader = DataLoader(TensorDataset(pred_range, pred_range), batch_size=500, shuffle=False)
+
 print('MSE:', mse)
+
+fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+ax.plot(pred_range.cpu().numpy(), bbvi.predict_matrix(pred_range_loader).cpu().numpy(), color='lightblue', alpha=0.3)
+ax.plot(x_test.cpu().numpy(), y_test.cpu().numpy(), 'o', label='Test data', alpha=0.3)
+ax.plot(x_test.cpu().numpy(), bbvi.predict(test_loader).cpu().numpy(), 'o', label='Predicted data', alpha=0.3)
+ax.plot(x_train.cpu().numpy(), y_train.cpu().numpy(), 'o', label='Train data')
+
+
+ax.legend()
+plt.show()

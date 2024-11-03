@@ -79,14 +79,28 @@ class BBVI_Regression(object):
             y_preds /= num_samples
         return y_preds
     
+    def predict_matrix(self, test_loader, num_samples=100):
+        self.model.eval()
+        N = len(test_loader.dataset)
+        y_preds = torch.zeros(N, num_samples, device=self.device) #hardcoded number of labels (100)
+        with torch.no_grad():
+            for i in range(num_samples):
+                w_sample = self.generate_posterior_sample()
+                set_weights(self.params, w_sample)
+                idx = 0
+                for Xtest, _ in test_loader:
+                    Xtest = Xtest.to(self.device)
+                    batch_size = len(Xtest)
+                    y_preds[idx:idx+batch_size, i] += self.model(Xtest)[:,0]
+                    idx += batch_size
+        return y_preds
+    
     def compute_all_metrics(self, test_loader, num_samples=100):
         """ Compute all metrics """
         preds = self.predict(test_loader, num_samples=num_samples)
         ytest = torch.cat([y for _, y in test_loader], dim=0)
         ytest = ytest.to(self.device)
         mse = torch.mean((preds - ytest)**2).cpu().item()
-        #entropy = -torch.sum(logits * torch.log(logits+1e-6), dim=1).mean().cpu().item()
-        #lpd = torch.log(logits[torch.arange(len(ytest)), ytest] + 1e-6).mean().cpu().item()
         return mse
     
     def compute_entropy(self, v=None):
@@ -161,7 +175,9 @@ def log_like_NN_regression(model, params, X, y, theta):
 
     set_weights(params, theta)# Set the weights for the model
     sse = torch.nn.MSELoss(reduction='sum')(model(X), y)
-    return -sse
+    N = len(X)
+    sigma2 = 3
+    return -N/2 * torch.log(torch.Tensor([2 * torch.pi * sigma2])) - 1/(2*sigma2) * sse
 
 def extract_parameters(model):
     params = []	
