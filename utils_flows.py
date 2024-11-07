@@ -35,9 +35,12 @@ class BBVI_NormalizingFlows(object):
         self.v = nn.Parameter(torch.tensor([-1. for _ in range(K)], device = self.device)) #initialize v in log domain 
         
         # Initialize parameters for the normalizing flow
-        self.u = [nn.Parameter(torch.ones(K, device=device)) for _ in range(num_transformations)]
-        self.w = [nn.Parameter(torch.ones(K, device=device)) for _ in range(num_transformations)]
-        self.b = [nn.Parameter(torch.tensor(1.0, device=device)) for _ in range(num_transformations)]
+        #self.u = [nn.Parameter(torch.ones(K, device=device)) for _ in range(num_transformations)]
+        #self.w = [nn.Parameter(torch.ones(K, device=self.device)) for _ in range(num_transformations)]
+        
+        self.u = [nn.Parameter(torch.tensor([0.1 for _ in range(K)], device=self.device)) for _ in range(num_transformations)]
+        self.w = [nn.Parameter(torch.tensor([0.1 for _ in range(K)], device=self.device)) for _ in range(num_transformations)]
+        self.b = [nn.Parameter(torch.tensor(0.1, device=self.device)) for _ in range(num_transformations)]
 
         # Collect all parameters
         self.parameters = [self.m, self.v] + self.u + self.w + self.b
