@@ -30,7 +30,7 @@ def plot_graph(ax, result_dict, dataset = "mnist", methods = ["BBVI"],
      fm_baseline = {"Accuracy": 0.9055, "Entropy": 0.169, "LPD": -0.289, "ECE": 0.031, "MCE": 0.271, "OOD": 0.375}
      m_baseline = {"Accuracy": 0.989, "Entropy": 0.023, "LPD": -0.031, "ECE": 0.004, "MCE": 0.189, "OOD": 1.217}
      
-     method_color_dict = {"BBVI": plt.get_cmap('Blues', 20), "Langevin": plt.get_cmap('Reds', 20)}
+     method_color_dict = {"BBVI": plt.get_cmap('Blues', 20), "Langevin": plt.get_cmap('Reds', 20), "LLLA": plt.get_cmap('Greens', 20)}
 
      if dataset == "mnist":
           ax.axhline(y=m_baseline[metric[0]], color='black', linestyle='--', label="MNIST Baseline")
@@ -40,6 +40,12 @@ def plot_graph(ax, result_dict, dataset = "mnist", methods = ["BBVI"],
      for method in methods:
 
           col_idx = 8
+          if method == "LLLA":
+               for m in metric:
+                    y = [result_dict[f"method={method}"][f"dataset={dataset}"][f"K=0"][f"T=1"][f"low_rank={0}"][f"sigma={sigma}"][m] for sigma in prior_sigmas]
+                    ax.plot(prior_sigmas, y, 'o-', label=f"{method}", c = method_color_dict[method](col_idx))
+                    col_idx += 2
+               break
           for i, T_type in enumerate(T_types[method]):
                if plot_by == "prior_var":
                     for low_rank in filter_by["low_rank"]:
@@ -132,7 +138,7 @@ def run_gui():
     # Checkbox for methods
     method_vars = []
     tk.Label(root, text="VI Methods:", font=('Arial', 16)).grid(row=3, column=0)
-    method_types = ["BBVI", "Langevin"]
+    method_types = ["BBVI", "Langevin", "LLLA"]
     for i, method in enumerate(method_types):
         var = BooleanVar()
         checkbox = tk.Checkbutton(root, text=method, variable=var, font=('Arial', 16))
@@ -214,7 +220,7 @@ def run_gui():
              filter_K = [10, 100, 1000]
         if "All" in filter_low_rank:
              filter_low_rank = [0, 1, 2, 5, 10]
-        print("selected_metrics: ", selected_metrics, "dataset: ", dataset, "type_plot: ", type_plot, "method: ", method, "T type dict: ", T_type_dict, "filter_K: ", filter_K, "filter_low_rank: ", filter_low_rank, "filter_prior_var: ", filter_prior_var)
+        #print("selected_metrics: ", selected_metrics, "dataset: ", dataset, "type_plot: ", type_plot, "method: ", method, "T type dict: ", T_type_dict, "filter_K: ", filter_K, "filter_low_rank: ", filter_low_rank, "filter_prior_var: ", filter_prior_var)
         filter_dict = {"K": filter_K, "low_rank": filter_low_rank, "prior_var": filter_prior_var}
         if selected_metrics:
             plot_graph(ax, result_dict=nested_result_dict, dataset=dataset, methods=method, T_types=T_type_dict, 
